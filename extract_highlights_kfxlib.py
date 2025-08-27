@@ -222,6 +222,8 @@ def generate_html(title, authors, items, output_path, year=""):
         text = escape(item.get("text", ""))
         if item.get("type") == "note":
             html_parts.append(f"<div class='noteHeading'>Note{meta_str}</div>")
+        elif item.get("type") == "bookmark":
+            html_parts.append(f"<div class='noteHeading'>Bookmark{meta_str}</div>")
         else:
             html_parts.append(
                 f"<div class='noteHeading'>Highlight (<span class='highlight_yellow'>yellow</span>){meta_str}</div>"
@@ -248,8 +250,9 @@ def main():
     ann_obj = data.get("annotation.cache.object", {})
     annotations = ann_obj.get("annotation.personal.highlight", [])
     notes = ann_obj.get("annotation.personal.note", [])
-    if not annotations and not notes:
-        print("No highlights or notes found in annotation data.")
+    bookmarks = ann_obj.get("annotation.personal.bookmark", [])
+    if not annotations and not notes and not bookmarks:
+        print("No highlights, notes, or bookmarks found in annotation data.")
         return
 
     sections = load_content_sections(kfx_file)
@@ -289,16 +292,17 @@ def main():
         notes_by_end.setdefault(pos, []).append(n["note"])
 
     annotations.sort(key=lambda a: int(a["startPosition"].split(":")[1]))
-    print(f"Found {len(annotations)} highlights:\n{'='*60}")
-    for i, ann in enumerate(annotations, 1):
+
+    # Build items for HTML and a separate timeline for printing (highlights + bookmarks)
+    timeline = []
+
+    for ann in annotations:
         start = int(ann["startPosition"].split(":")[1])
         end = int(ann["endPosition"].split(":")[1])
         text = extract_text(sections, start, end)
         page = page_for_pid(start)
         section, chapter = find_section(start)
-        print(f"\nHighlight #{i}")
-        print(f"Created: {ann['creationTime']}")
-        print(f"Text: {text}\n{'-'*60}")
+
         highlights.append({
             "creationTime": ann["creationTime"],
             "text": text,
@@ -307,6 +311,19 @@ def main():
             "chapter": chapter,
             "type": "highlight",
         })
+
+        # Add highlight to timeline (use lastModificationTime for ordering)
+        timeline.append({
+            "type": "highlight",
+            "creationTime": ann.get("creationTime", ""),
+            "lastModificationTime": ann.get("lastModificationTime", ""),
+            "text": text,
+            "page": page,
+            "section": section,
+            "chapter": chapter,
+            "start": start,
+        })
+
         for note_text in notes_by_end.get(end, []):
             highlights.append({
                 "creationTime": "",
@@ -316,6 +333,58 @@ def main():
                 "chapter": chapter,
                 "type": "note",
             })
+
+    # Add bookmarks to the timeline
+    for bm in bookmarks:
+        bm_start = int(bm["startPosition"].split(":")[1])
+        page = page_for_pid(bm_start)
+        section, chapter = find_section(bm_start)
+        timeline.append({
+            "type": "bookmark",
+            "creationTime": bm.get("creationTime", ""),
+            "lastModificationTime": bm.get("lastModificationTime", ""),
+            "text": "",  # bookmarks have no text selection
+            "page": page,
+            "section": section,
+            "chapter": chapter,
+            "start": bm_start,
+        })
+
+    # Sort timeline by lastModificationTime (ISO string sort works), break ties by start position
+    timeline.sort(key=lambda x: (x.get("lastModificationTime", ""), x.get("start", -1)))
+
+    # Print interleaved timeline
+    if timeline:
+        print(f"Timeline (by lastModificationTime):\n{'='*60}")
+        h_idx = 0
+        for item in timeline:
+            if item["type"] == "highlight":
+                h_idx += 1
+                print(f"\nHighlight #{h_idx}")
+                if item.get("lastModificationTime"):
+                    print(f"Last Modified: {item['lastModificationTime']}")
+                elif item.get("creationTime"):
+                    print(f"Created: {item['creationTime']}")
+                if item.get("page"):
+                    print(f"Page: {item['page']}")
+                if item.get("section"):
+                    print(f"Section: {item['section']}")
+                if item.get("chapter"):
+                    print(f"Chapter: {item['chapter']}")
+                print(f"Text: {item.get('text','')}\n{'-'*60}")
+            else:  # bookmark
+                print(f"\nBookmark")
+                if item.get("lastModificationTime"):
+                    print(f"Last Modified: {item['lastModificationTime']}")
+                elif item.get("creationTime"):
+                    print(f"Created: {item['creationTime']}")
+                if item.get("page"):
+                    print(f"Page: {item['page']}")
+                if item.get("section"):
+                    print(f"Section: {item['section']}")
+                if item.get("chapter"):
+                    print(f"Chapter: {item['chapter']}")
+                print('-'*60)
 
     output_html = Path(kfx_file).with_suffix(".highlights.html")
     year = ""
